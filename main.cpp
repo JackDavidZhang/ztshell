@@ -7,10 +7,9 @@
 #include <sys/utsname.h>
 #include <pwd.h>
 #include <dirent.h>
+#include "include/build_in.hpp"
 
 void mainThread();
-
-int shellExit();
 
 void sigHandler(int sig);
 
@@ -18,14 +17,8 @@ int execCommand(std::istringstream &);
 
 int shellEcho(std::istringstream &);
 
-int shellLs(std::istringstream &);
-
-int shellPwd(std::istringstream &);
-
-int shellCd(std::istringstream &);
-
-bool flag = true;
 bool inThread = false;
+bool runningFlag = true;
 std::string path;
 std::string scPath;
 std::thread main_thread;
@@ -47,7 +40,7 @@ int main() {
     path = pwd->pw_dir;
     chdir(path.c_str());
     scPath = "~";
-    while (flag) {
+    while (runningFlag) {
         main_thread = std::thread(mainThread);
         main_thread.join();
     }
@@ -67,7 +60,61 @@ void mainThread() {
         shellExit();
     } else {
         std::istringstream istr(input);
+        std::vector<std::string> words;
+        bool quoted = false;
+        bool blank = true;
+        for (int i = 0; i < strlen(input); i++) {
+            if (quoted) {
+                if (blank) {
+                    words.emplace_back("");
+                    blank = false;
+                }
+                words.back() += input[i];
+            } else {
+                if (input[i] == 9 || input[i] == 10 || input[i] == 13 || input[i] == 32) {
+                    blank = true;
+                } else if (blank) {
+                    words.emplace_back("");
+                    blank = false;
+                }
+                words.back() += input[i];
+            }
+            if (input[i] == '"') quoted = !quoted;
+        }
         free(input);
+        if (quoted) {
+            std::cout << "wrong format" << std::endl;
+            execStatus = -1;
+            return;
+        }
+        if(words.empty()) {
+            return;
+        }
+        for(int i = 0;i < words.size(); i++) {
+            if(words[i][0]=='"'&&words[i][words[i].size()-1]=='"') words[i]=words[i].substr(1, words[i].size()-2);
+            else {
+                if(words[i]=="~"||words[i].substr(0,2)=="~/") {
+                    words[i]=pwd->pw_dir+words[i].substr(1);
+                }
+                bool matched = false;
+                int begin;
+                for(int j = 0;j < words[i].size(); j++) {
+                    if(words[i][j]=='$'){
+                        matched = true;
+                        begin = j;
+                        continue;
+                    }
+                    if(matched) {
+                        if((words[i][j]<='z'&&words[i][j]>='a')||(words[i][j]>='A'&&words[i][j]<='Z')||(words[i][j]>='1'&&words[i][j]<='9')||(words[i][j]>='0'&&words[i][j]=='_')) {
+                            j++;
+                        }else {
+                            matched = false;
+
+                        }
+                    }
+                }
+            }
+        }
         execStatus = execCommand(istr);
     }
 }
@@ -75,6 +122,7 @@ void mainThread() {
 int execCommand(std::istringstream &istr) {
     std::string command;
     if (!(istr >> command)) return 0;
+
     if (command == "exit") {
         return shellExit();
     }
@@ -94,11 +142,6 @@ int execCommand(std::istringstream &istr) {
     return -1;
 }
 
-int shellExit() {
-    flag = false;
-    return 0;
-}
-
 int shellEcho(std::istringstream &istr) {
     std::vector<std::string> paragrams;
     std::string para;
@@ -113,52 +156,4 @@ void sigHandler(int sig) {
     if (inThread) pthread_cancel(main_thread.native_handle());
     std::cout << sig << std::endl;
     execStatus = -1;
-}
-
-int shellLs(std::istringstream &istr) {
-    DIR *dirp = opendir(path.c_str());
-    if (dirp == NULL) {
-        std::cout << "can not open directory " << path << std::endl;
-        return -1;
-    }
-    std::cout << path << std::endl;
-    struct dirent *entry;
-    while ((entry = readdir(dirp))) {
-        if (entry->d_name[0] == '.') continue;
-        std::cout << entry->d_name << " ";
-    }
-    std::cout << std::endl;
-    return 0;
-}
-
-int shellPwd(std::istringstream &istr) {
-    if (istr.eof()) {
-        char* wd = getcwd(nullptr, 0);
-        std::cout << wd << std::endl;
-        return 0;
-    } else {
-        std::cout << "Too many arguments." << std::endl;
-        return -1;
-    }
-}
-
-int shellCd(std::istringstream &istr) {
-    std::string cpath;
-    istr >> cpath;
-    if (!istr.eof()) {
-        std::cout << "Too many arguments." << std::endl;
-        return -1;
-    }
-    if(chdir(cpath.c_str())) {
-        std::cout << "Can't change working directory to " << cpath << std::endl;
-        return -1;
-    }else {
-        path = getcwd(nullptr, 0);
-        if((path==pwd->pw_dir)||path.substr(0,std::string(pwd->pw_dir).size()+1)==std::string(pwd->pw_dir)+"/") {
-            scPath = "~"  + path.substr(std::string(pwd->pw_dir).size());
-        }else {
-            scPath = path;
-        }
-        return 0;
-    }
 }
