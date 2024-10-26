@@ -13,4 +13,5 @@ add_executable(ztshell main.cpp
         src/ls.cpp
         src/env.cpp
         include/env.hpp
+        src/export.cpp
 )

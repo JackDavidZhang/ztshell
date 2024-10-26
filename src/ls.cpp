@@ -1,9 +1,8 @@
 #include <dirent.h>
-#include<sstream>
 #include<iostream>
 #include"../include/build_in.hpp"
 
-int shellLs(std::istringstream &istr) {
+int shellLs(arguments& arg) {
     DIR *dirp = opendir(path.c_str());
     if (dirp == NULL) {
         std::cout << "can not open directory " << path << std::endl;
