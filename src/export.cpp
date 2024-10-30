@@ -3,7 +3,7 @@
 #include"../include/build_in.hpp"
 #include"../include/env.hpp"
 
-int shellExport(arguments& arg) {
+int shellExport(arguments &arg) {
     if (arg.argc > 1) {
         std::cout << "Too many arguments" << std::endl;
         return -1;
@@ -21,7 +21,8 @@ int shellExport(arguments& arg) {
                     std::cout << "format wrong" << std::endl;
                     return -1;
                 }
-            if (eq < 0 && !((arg.argv[0][i] >= 'a' && arg.argv[0][i] <= 'z') || (arg.argv[0][i] >= 'A' && arg.argv[0][i] <= 'Z') || (
+            if (eq < 0 && !((arg.argv[0][i] >= 'a' && arg.argv[0][i] <= 'z') || (
+                                arg.argv[0][i] >= 'A' && arg.argv[0][i] <= 'Z') || (
                                 arg.argv[0][i] >= '0' && arg.argv[0][i] <= '9') || (arg.argv[0][i] == '_'))) {
                 std::cout << "Invalid input" << std::endl;
                 return -1;
@@ -41,4 +42,5 @@ int shellExport(arguments& arg) {
         print_env();
         return 0;
     }
+    return -1;
 }

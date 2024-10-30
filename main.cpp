@@ -1,3 +1,4 @@
+#include <csetjmp>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -8,6 +9,10 @@
 #include <dirent.h>
 #include "include/build_in.hpp"
 #include "include/env.hpp"
+#include <setjmp.h>
+#include <map>
+#include <utility>
+#include<sys/stat.h>
 
 void mainThread();
 
@@ -17,7 +22,8 @@ int execCommand(arguments &);
 
 int shellEcho(arguments &);
 
-bool inThread = false;
+void readExecutable();
+
 bool runningFlag = true;
 std::string path;
 std::string scPath;
@@ -25,6 +31,8 @@ std::thread main_thread;
 utsname un;
 passwd *pwd;
 tm *timeinfo;
+jmp_buf mainCycle;
+std::map<uint64_t, std::string> execMap;
 
 int execStatus = 0;
 
@@ -32,7 +40,6 @@ int main() {
     struct sigaction act;
     act.sa_handler = sigHandler;
     sigaction(SIGINT, &act, nullptr);
-    inThread = true;
     if (uname(&un)) {
         return 1;
     }
@@ -40,11 +47,12 @@ int main() {
     path = pwd->pw_dir;
     chdir(path.c_str());
     scPath = "~";
+    env_init();
+    readExecutable();
+    setjmp(mainCycle);
     while (runningFlag) {
-        main_thread = std::thread(mainThread);
-        main_thread.join();
+        mainThread();
     }
-    inThread = false;
     return 0;
 }
 
@@ -116,11 +124,12 @@ void mainThread() {
                             matched = false;
                             if (length > 1) {
                                 if ((words[i][begin + 1] >= 'a' && words[i][begin + 1] <= 'z') || (
-                                        words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z')) {
-                                    std::string var = words[i].substr(begin+1,length-1);
+                                        words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z') || (
+                                        words[i][begin + 1] == '_')) {
+                                    std::string var = words[i].substr(begin + 1, length - 1);
                                     std::string value = get_env(&var);
-                                    words[i] = words[i].substr(0,begin)+value+words[i].substr(begin+length);
-                                    j=begin+value.size();
+                                    words[i] = words[i].substr(0, begin) + value + words[i].substr(begin + length);
+                                    j = begin + value.size();
                                 }
                             }
                             j--;
@@ -134,15 +143,16 @@ void mainThread() {
                     }
                 }
                 if (matched && ((words[i][begin + 1] >= 'a' && words[i][begin + 1] <= 'z') || (
-                words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z'))) {
-                    std::string var = words[i].substr(begin+1,length-1);
+                                    words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z') || (
+                                    words[i][begin + 1] == '_'))) {
+                    std::string var = words[i].substr(begin + 1, length - 1);
                     std::string value = get_env(&var);
-                    words[i] = words[i].substr(0,begin)+value+words[i].substr(begin+length);
+                    words[i] = words[i].substr(0, begin) + value + words[i].substr(begin + length);
                 }
             }
         }
         arguments arg;
-        arg.argc = words.size()-1;
+        arg.argc = words.size() - 1;
         arg.argv = words.empty() ? nullptr : &words[1];
         arg.command = words[0];
         execStatus = execCommand(arg);
@@ -167,15 +177,18 @@ int execCommand(arguments &arg) {
     if (arg.command == "cd") {
         return shellCd(arg);
     }
-    if(arg.command == "export") {
+    if (arg.command == "export") {
         return shellExport(arg);
+    }
+    if (arg.command == "where") {
+        return shellWhere(arg);
     }
     std::cout << "ztsh: command not found: " << arg.command << std::endl;
     return -1;
 }
 
-int shellEcho(arguments& arg) {
-    for(int i = 0; i < arg.argc; i++) {
+int shellEcho(arguments &arg) {
+    for (int i = 0; i < arg.argc; i++) {
         std::cout << arg.argv[i] << " ";
     }
     std::cout << std::endl;
@@ -183,7 +196,51 @@ int shellEcho(arguments& arg) {
 }
 
 void sigHandler(int sig) {
-    if (inThread) pthread_cancel(main_thread.native_handle());
-    std::cout << sig << std::endl;
-    execStatus = -1;
+    std::cout.flush();
+    std::cout << "Stopped" << std::endl;
+    longjmp(mainCycle, 1);
+}
+
+void loadExecutable(std::string &path) {
+    DIR *dirp = opendir(path.c_str());
+    if (dirp == NULL) {
+        std::cout << "can not open directory " << path << std::endl;
+        return;
+    }
+    struct dirent *entry;
+    auto *file = static_cast<struct stat *>(malloc(sizeof(struct stat)));
+    while ((entry = readdir(dirp))) {
+        if (entry->d_name[0] == '.') continue;
+        if (stat((path + '/' + (entry->d_name)).c_str(), file)) {
+            std::cout << "Error: " << entry->d_name << " " << errno << std::endl;
+        } else {
+            if (((file->st_mode) & S_IXUSR) && (S_ISREG(file->st_mode))) {
+                uint64_t commandHash = std::hash<std::string>()(std::string(entry->d_name));
+                if (execMap.find(commandHash) == execMap.end()) {
+                    execMap.insert(std::pair<uint64_t, std::string>(commandHash, path + '/' + (entry->d_name)));
+                } else {
+                    execMap[commandHash] = path + '/' + (entry->d_name);
+                }
+            }
+        }
+    }
+    free(file);
+    closedir(dirp);
+}
+
+void readExecutable() {
+    int beg = 0, end = 0;
+    std::string spath = "PATH";
+    std::string PATH = get_env(&spath);
+    for (; PATH[end]; end++) {
+        if (PATH[end] == ':') {
+            std::string pPath = PATH.substr(beg, end - beg);
+            loadExecutable(pPath);
+            beg = end + 1;
+        }
+    }
+    if (end - beg) {
+        std::string pPath = PATH.substr(beg, end - beg);
+        loadExecutable(pPath);
+    }
 }

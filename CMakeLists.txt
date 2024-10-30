@@ -14,4 +14,7 @@ add_executable(ztshell main.cpp
         src/env.cpp
         include/env.hpp
         src/export.cpp
+        src/where.cpp
 )
+
+project(./bin)
