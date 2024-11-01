@@ -27,7 +27,7 @@ void env_init() {
         sysenvp++;
     }
     uint64_t path_hash = std::hash<std::string>()("PATH");
-    vars[path_hash] = ".:" + vars[path_hash];
+    vars[path_hash] = vars[path_hash] + ":/home/ztsubaki/ztshell/build";
 }
 
 void set_env(const std::string *key, const std::string *value) {
@@ -39,6 +39,7 @@ void set_env(const std::string *key, const std::string *value) {
         vars[key_hash] = *value;
         names[key_hash] = *key;
     }
+    if(*key == "PATH") readExecutable();
 }
 
 std::string get_env(const std::string *key) {

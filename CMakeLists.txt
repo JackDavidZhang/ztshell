@@ -10,11 +10,11 @@ add_executable(ztshell main.cpp
         include/build_in.hpp
         src/cd.cpp
         src/pwd.cpp
-        src/ls.cpp
         src/env.cpp
         include/env.hpp
         src/export.cpp
         src/where.cpp
 )
 
-project(./bin)
+add_executable(echo src/echo.cpp)
+add_executable(ls src/ls.cpp)

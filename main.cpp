@@ -13,8 +13,9 @@
 #include <map>
 #include <utility>
 #include<sys/stat.h>
+#include <sys/wait.h>
 
-void mainThread();
+void mainCyc();
 
 void sigHandler(int sig);
 
@@ -32,6 +33,8 @@ utsname un;
 passwd *pwd;
 tm *timeinfo;
 jmp_buf mainCycle;
+bool forked = false;
+pid_t cpid;
 std::map<uint64_t, std::string> execMap;
 
 int execStatus = 0;
@@ -51,12 +54,12 @@ int main() {
     readExecutable();
     setjmp(mainCycle);
     while (runningFlag) {
-        mainThread();
+        mainCyc();
     }
     return 0;
 }
 
-void mainThread() {
+void mainCyc() {
     char *input;
     if (execStatus) std::cout << "\33[31mx\33[0m ";
     time_t now = time(nullptr);
@@ -161,15 +164,8 @@ void mainThread() {
 
 int execCommand(arguments &arg) {
     if (arg.command.empty()) return 0;
-
     if (arg.command == "exit") {
         return shellExit();
-    }
-    if (arg.command == "echo") {
-        return shellEcho(arg);
-    }
-    if (arg.command == "ls") {
-        return shellLs(arg);
     }
     if (arg.command == "pwd") {
         return shellPwd(arg);
@@ -182,6 +178,28 @@ int execCommand(arguments &arg) {
     }
     if (arg.command == "where") {
         return shellWhere(arg);
+    }
+    uint64_t commandHash = std::hash<std::string>()(arg.command);
+    if (execMap.find(commandHash)!= execMap.end()) {
+        std::cout << execMap[commandHash] << std::endl;
+        pid_t pid;
+        if((pid = fork())<0) return -1;
+        else if(pid == 0) {
+            std::vector <char*> args;
+            args.clear();
+            args.push_back(arg.command.data());
+            for (int i = 0; i < arg.argc; i++) args.push_back(arg.argv[i].data());
+            args.push_back(nullptr);
+            execv(execMap[commandHash].c_str(), args.data());
+        }else {
+            int status;
+            forked = true;
+            cpid = pid;
+            waitpid(pid,&status,0);
+            forked = false;
+            return status;
+        }
+        return 0;
     }
     std::cout << "ztsh: command not found: " << arg.command << std::endl;
     return -1;
@@ -196,8 +214,11 @@ int shellEcho(arguments &arg) {
 }
 
 void sigHandler(int sig) {
+    if(forked) {
+        kill(cpid,SIGINT);
+        forked = false;
+    }
     std::cout.flush();
-    std::cout << "Stopped" << std::endl;
     longjmp(mainCycle, 1);
 }
 

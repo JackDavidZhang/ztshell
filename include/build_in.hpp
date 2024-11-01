@@ -15,7 +15,6 @@ struct arguments {
     std::string* argv;
 };
 int shellExit();
-int shellLs(arguments& arg);
 int shellCd(const arguments& arg);
 int shellPwd(const arguments& arg);
 int shellExport(arguments& arg);
