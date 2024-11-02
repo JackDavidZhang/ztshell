@@ -40,6 +40,7 @@ void set_env(const std::string *key, const std::string *value) {
         names[key_hash] = *key;
     }
     if(*key == "PATH") readExecutable();
+    //TODO: Sync system env
 }
 
 std::string get_env(const std::string *key) {

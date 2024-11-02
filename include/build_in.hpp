@@ -2,6 +2,7 @@
 #include<string>
 #include<map>
 #include<cstdint>
+#include<vector>
 #ifndef BUILD_IN_H
 #define BUILD_IN_H
 extern bool runningFlag;
@@ -13,6 +14,9 @@ struct arguments {
     std::string command;
     int argc;
     std::string* argv;
+    std::vector<int> stdinfds;
+    std::vector<int> stdoutfds;
+    std::vector<int> stderrfds;
 };
 int shellExit();
 int shellCd(const arguments& arg);

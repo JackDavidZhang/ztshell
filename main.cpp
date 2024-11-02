@@ -1,3 +1,4 @@
+#include <complex>
 #include <csetjmp>
 #include <iostream>
 #include <thread>
@@ -9,11 +10,13 @@
 #include <dirent.h>
 #include "include/build_in.hpp"
 #include "include/env.hpp"
-#include <setjmp.h>
 #include <map>
+#include <queue>
 #include <utility>
 #include<sys/stat.h>
 #include <sys/wait.h>
+#include <unistd.h>
+#include <fcntl.h>
 
 void mainCyc();
 
@@ -22,8 +25,6 @@ void sigHandler(int sig);
 int execCommand(arguments &);
 
 int shellEcho(arguments &);
-
-void readExecutable();
 
 bool runningFlag = true;
 std::string path;
@@ -36,11 +37,12 @@ jmp_buf mainCycle;
 bool forked = false;
 pid_t cpid;
 std::map<uint64_t, std::string> execMap;
+std::queue<int> openedfd;
 
 int execStatus = 0;
 
 int main() {
-    struct sigaction act;
+    struct sigaction act{};
     act.sa_handler = sigHandler;
     sigaction(SIGINT, &act, nullptr);
     if (uname(&un)) {
@@ -52,6 +54,7 @@ int main() {
     scPath = "~";
     env_init();
     readExecutable();
+    while(!openedfd.empty()) {openedfd.pop();}
     setjmp(mainCycle);
     while (runningFlag) {
         mainCyc();
@@ -60,6 +63,10 @@ int main() {
 }
 
 void mainCyc() {
+    while(!openedfd.empty()) {
+        close(openedfd.front());
+        openedfd.pop();
+    }
     char *input;
     if (execStatus) std::cout << "\33[31mx\33[0m ";
     time_t now = time(nullptr);
@@ -73,7 +80,7 @@ void mainCyc() {
     std::cout << timeinfo->tm_sec << ' ' << pwd->pw_name << '@'
             << un.nodename << ' ' << scPath << ' ';
     input = readline(" > ");
-    if (input == NULL) {
+    if (input == nullptr) {
         shellExit();
     } else {
         std::vector<std::string> words;
@@ -109,57 +116,140 @@ void mainCyc() {
             execStatus = 0;
             return;
         }
-        for (int i = 0; i < words.size(); i++) {
-            if (words[i][0] == '"' && words[i][words[i].size() - 1] == '"')
-                words[i] = words[i].substr(1, words[i].size() - 2);
+        for (auto & word : words) {
+            if (word[0] == '"' && word[word.size() - 1] == '"')
+                word = word.substr(1, word.size() - 2);
             else {
-                if (words[i] == "~" || words[i].substr(0, 2) == "~/") {
-                    words[i] = pwd->pw_dir + words[i].substr(1);
+                if (word == "~" || word.substr(0, 2) == "~/") {
+                    word = pwd->pw_dir + word.substr(1);
                 }
                 bool matched = false;
                 int begin = -1, length = -1;
-                for (int j = 0; j < words[i].size(); j++) {
+                for (int j = 0; j < word.size(); j++) {
                     if (matched) {
-                        if ((words[i][j] <= 'z' && words[i][j] >= 'a') || (words[i][j] >= 'A' && words[i][j] <= 'Z') ||
-                            (words[i][j] >= '0' && words[i][j] <= '9') || words[i][j] == '_') {
+                        if ((word[j] <= 'z' && word[j] >= 'a') || (word[j] >= 'A' && word[j] <= 'Z') ||
+                            (word[j] >= '0' && word[j] <= '9') || word[j] == '_') {
                             length++;
                         } else {
                             matched = false;
                             if (length > 1) {
-                                if ((words[i][begin + 1] >= 'a' && words[i][begin + 1] <= 'z') || (
-                                        words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z') || (
-                                        words[i][begin + 1] == '_')) {
-                                    std::string var = words[i].substr(begin + 1, length - 1);
+                                if ((word[begin + 1] >= 'a' && word[begin + 1] <= 'z') || (
+                                        word[begin + 1] >= 'A' && word[begin + 1] <= 'Z') || (
+                                        word[begin + 1] == '_')) {
+                                    std::string var = word.substr(begin + 1, length - 1);
                                     std::string value = get_env(&var);
-                                    words[i] = words[i].substr(0, begin) + value + words[i].substr(begin + length);
+                                    word = word.substr(0, begin) + value + word.substr(begin + length);
                                     j = begin + value.size();
                                 }
                             }
                             j--;
                         }
                     } else {
-                        if (words[i][j] == '$') {
+                        if (word[j] == '$') {
                             matched = true;
                             begin = j;
                             length = 1;
                         }
                     }
                 }
-                if (matched && ((words[i][begin + 1] >= 'a' && words[i][begin + 1] <= 'z') || (
-                                    words[i][begin + 1] >= 'A' && words[i][begin + 1] <= 'Z') || (
-                                    words[i][begin + 1] == '_'))) {
-                    std::string var = words[i].substr(begin + 1, length - 1);
+                if (matched && ((word[begin + 1] >= 'a' && word[begin + 1] <= 'z') || (
+                                    word[begin + 1] >= 'A' && word[begin + 1] <= 'Z') || (
+                                    word[begin + 1] == '_'))) {
+                    std::string var = word.substr(begin + 1, length - 1);
                     std::string value = get_env(&var);
-                    words[i] = words[i].substr(0, begin) + value + words[i].substr(begin + length);
+                    word = word.substr(0, begin) + value + word.substr(begin + length);
                 }
             }
         }
-        arguments arg;
-        arg.argc = words.size() - 1;
-        arg.argv = words.empty() ? nullptr : &words[1];
-        arg.command = words[0];
-        execStatus = execCommand(arg);
-    }
+        int index = 0;
+        std::vector<arguments> args ;
+        if(words[words.size() - 1] == "|") {
+            std::cerr << "Wrong format." << std::endl;
+            execStatus = -1;
+            return ;
+        }
+        words.push_back("|");
+        int beg = 0;
+        for(int i = 0; i < words.size(); i++) {
+            if(words[i]=="|") {
+                arguments arg;
+                arg.argc = i-beg-1;
+                if(arg.argc<0) {
+                    std::cerr << "Wrong format." << std::endl;
+                    execStatus = -1;
+                    return ;
+                }
+                arg.command = words[beg];
+                arg.argv = &words[beg+1];
+                args.push_back(arg);
+                beg = i+1;
+            }
+        }
+        for(int i = 0; i < args.size(); i++) {
+            int target = 0;
+            for(int j = 0;j < args[i].argc; j++) {
+                if(args[i].argv[j] == ">"||args[i].argv[j] == "0>"||args[i].argv[j] == "1>") {
+                    if(j==args[i].argc-1) {
+                        std::cerr << "Wrong format." << std::endl;
+                        execStatus = -1;
+                        return ;
+                    }
+                    int fd;
+                    if((fd=open(args[i].argv[j+1].c_str(),O_WRONLY))==-1) {
+                        std::cerr << "Cannot open file " << args[i].argv[j+1] << std::endl;
+                        execStatus = -1;
+                        return ;
+                    }else {
+                        openedfd.push(fd);
+                        if(args[i].argv[j] == ">"||args[i].argv[j] == "0>")
+                            args[i].stdoutfds.push_back(fd);
+                        else args[i].stderrfds.push_back(fd);
+                        args[i].argv[j+1].clear();
+                    }
+                    j++;
+                    continue;
+                }
+                if(args[i].argv[j] == "<"||args[i].argv[j] == "2<") {
+                    if(j==args[i].argc-1) {
+                        std::cerr << "Wrong format." << std::endl;
+                        execStatus = -1;
+                        return ;
+                    }
+                    int fd;
+                    if((fd=open(args[i].argv[j+1].c_str(),O_RDONLY))==-1) {
+                        std::cerr << "Cannot open file " << args[i].argv[j+1] << std::endl;
+                        execStatus = -1;
+                        return ;
+                    }else {
+                        openedfd.push(fd);
+                        args[i].stdinfds.push_back(fd);
+                    }
+                    j++;
+                    continue;
+                }
+                args[i].argv[target] = args[i].argv[j];
+                target++;
+            }
+            args[i].argc -= 2*(args[i].stderrfds.size()+args[i].stdoutfds.size()+args[i].stdinfds.size());
+        }
+        int fdin,fdout;
+        for(int i = 0; i < args.size(); i++) {
+            if(i) args[i].stdinfds.insert(args[i].stdinfds.begin(),fdin);
+            if(i-args.size()+1) {
+                int pipefd[2];
+                if(pipe(pipefd) == -1) {
+                    std::cerr << "Cannot create pipe." << std::endl;
+                    execStatus = -1;
+                    return ;
+                }
+                openedfd.push(pipefd[0]);
+                openedfd.push(pipefd[1]);
+                fdin =  pipefd[1];
+                fdout = pipefd[0];
+                args[i].stdoutfds.insert(args[i].stdoutfds.begin(),fdout);
+            }
+            execStatus = execCommand(args[i]);
+        }}
 }
 
 int execCommand(arguments &arg) {
@@ -193,6 +283,7 @@ int execCommand(arguments &arg) {
             execv(execMap[commandHash].c_str(), args.data());
         }else {
             int status;
+
             forked = true;
             cpid = pid;
             waitpid(pid,&status,0);
