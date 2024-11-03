@@ -2,5 +2,6 @@
 
 int shellExit() {
     runningFlag = false;
+    exit(0);
     return 0;
 }

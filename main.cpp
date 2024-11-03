@@ -244,30 +244,82 @@ void mainCyc() {
                 }
                 openedfd.push(pipefd[0]);
                 openedfd.push(pipefd[1]);
-                fdin =  pipefd[1];
-                fdout = pipefd[0];
+                fdin =  pipefd[0];
+                fdout = pipefd[1];
                 args[i].stdoutfds.insert(args[i].stdoutfds.begin(),fdout);
             }
             execStatus = execCommand(args[i]);
+            close(fdout);
         }}
 }
 
 int execCommand(arguments &arg) {
     if (arg.command.empty()) return 0;
-    if (arg.command == "exit") {
-        return shellExit();
+    int fdin=0,fdout=1,fderr=2;
+    int pfdout=1,pfderr=2;
+    if(arg.stdinfds.size()!=0) {
+        int pipefd[2];
+        if(pipe(pipefd)) {
+            std::cerr << "Cannot create pipe." << std::endl;
+            return -1;
+        }else {
+            FILE* pin = fdopen(pipefd[1],"w");
+            for(int i = 0; i < arg.stdinfds.size(); i++) {
+                FILE* fin =  fdopen(arg.stdinfds[i],"r");
+                while(!feof(fin)) {
+                    char c = fgetc(fin);
+                    fputc(c,pin);
+                }
+            }
+            fclose(pin);
+            close(pipefd[1]);
+            fdin = pipefd[0];
+        }
     }
-    if (arg.command == "pwd") {
-        return shellPwd(arg);
+    if(arg.stdoutfds.size()!=0) {
+        int pipefd[2];
+        if(pipe(pipefd)) {
+            std::cerr << "Cannot create pipe." << std::endl;
+            return -1;
+        }else {
+            pfdout = pipefd[0];
+            fdout =  pipefd[1];
+        }
     }
-    if (arg.command == "cd") {
-        return shellCd(arg);
+    if(arg.stderrfds.size()!=0) {
+        int pipefd[2];
+        if(pipe(pipefd)) {
+            std::cerr << "Cannot create pipe." << std::endl;
+            return -1;
+        }else {
+            pfderr = pipefd[0];
+            fderr =  pipefd[1];
+        }
     }
-    if (arg.command == "export") {
-        return shellExport(arg);
-    }
-    if (arg.command == "where") {
-        return shellWhere(arg);
+    if(arg.command == "exit"||arg.command=="pwd"||arg.command=="cd"||arg.command=="export"||arg.command=="where") {
+        int result = -1;
+        if(fdin != 0 ) stdin = fdopen(fdin,"r");
+        if(fdout != 1 ) stdout = fdopen(fdout,"w");
+        if(fderr != 2 ) stderr = fdopen(fderr,"w");
+        if (arg.command == "exit") {
+            result = shellExit();
+        }
+        else if (arg.command == "pwd") {
+            result = shellPwd(arg);
+        }
+        else if (arg.command == "cd") {
+            result = shellCd(arg);
+        }
+        else if (arg.command == "export") {
+            result = shellExport(arg);
+        }
+        else if (arg.command == "where") {
+            result = shellWhere(arg);
+        }
+        if(fdin != 0 ) stdin = fdopen(0,"r");
+        if(fdout != 1 ) stdout = fdopen(1,"w");
+        if(fderr != 2 ) stderr = fdopen(2,"w");
+        return result;
     }
     uint64_t commandHash = std::hash<std::string>()(arg.command);
     if (execMap.find(commandHash)!= execMap.end()) {
@@ -280,14 +332,42 @@ int execCommand(arguments &arg) {
             args.push_back(arg.command.data());
             for (int i = 0; i < arg.argc; i++) args.push_back(arg.argv[i].data());
             args.push_back(nullptr);
+            dup2(fdin,0);
+            dup2(fdout,1);
+            dup2(fderr,2);
             execv(execMap[commandHash].c_str(), args.data());
         }else {
             int status;
-
             forked = true;
             cpid = pid;
             waitpid(pid,&status,0);
             forked = false;
+            if(pfdout!=1) {
+                close(fdout);
+                std::vector<FILE*> fss;
+                fss.clear();
+                for(int i = 0;i < arg.stdoutfds.size(); i++) {
+                    fss.push_back(fdopen(arg.stdoutfds[i],"w"));
+                }
+                FILE* outstream = fdopen(pfdout,"r");
+                while(!feof(outstream)) {
+                    char c = fgetc(outstream);
+                    for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
+                }
+                for(int i = 0;i < fss.size(); i++) fclose(fss[i]);
+            }
+            if(pfderr!=2) {
+                close(fderr);
+                std::vector<FILE*> fss;
+                fss.clear();
+                for(int i = 0;i < arg.stderrfds.size(); i++)
+                    fss.push_back(fdopen(arg.stderrfds[i],"w"));
+                FILE* outstream = fdopen(pfderr,"r");
+                while(!feof(outstream)) {
+                    char c = fgetc(outstream);
+                    for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
+                }
+            }
             return status;
         }
         return 0;
@@ -307,10 +387,10 @@ int shellEcho(arguments &arg) {
 void sigHandler(int sig) {
     if(forked) {
         kill(cpid,SIGINT);
+        waitpid(cpid,NULL,0);
         forked = false;
+        longjmp(mainCycle, 1);
     }
-    std::cout.flush();
-    longjmp(mainCycle, 1);
 }
 
 void loadExecutable(std::string &path) {
