@@ -17,6 +17,10 @@ struct arguments {
     std::vector<int> stdinfds;
     std::vector<int> stdoutfds;
     std::vector<int> stderrfds;
+    pid_t pid;
+    int in;
+    int out;
+    int err;
 };
 int shellExit();
 int shellCd(const arguments& arg);

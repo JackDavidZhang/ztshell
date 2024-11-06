@@ -35,9 +35,8 @@ passwd *pwd;
 tm *timeinfo;
 jmp_buf mainCycle;
 bool forked = false;
-pid_t cpid;
+std::vector<pid_t> cpid;
 std::map<uint64_t, std::string> execMap;
-std::queue<int> openedfd;
 
 int execStatus = 0;
 
@@ -54,7 +53,6 @@ int main() {
     scPath = "~";
     env_init();
     readExecutable();
-    while(!openedfd.empty()) {openedfd.pop();}
     setjmp(mainCycle);
     while (runningFlag) {
         mainCyc();
@@ -63,10 +61,6 @@ int main() {
 }
 
 void mainCyc() {
-    while(!openedfd.empty()) {
-        close(openedfd.front());
-        openedfd.pop();
-    }
     char *input;
     if (execStatus) std::cout << "\33[31mx\33[0m ";
     time_t now = time(nullptr);
@@ -200,7 +194,6 @@ void mainCyc() {
                         execStatus = -1;
                         return ;
                     }else {
-                        openedfd.push(fd);
                         if(args[i].argv[j] == ">"||args[i].argv[j] == "0>")
                             args[i].stdoutfds.push_back(fd);
                         else args[i].stderrfds.push_back(fd);
@@ -221,7 +214,6 @@ void mainCyc() {
                         execStatus = -1;
                         return ;
                     }else {
-                        openedfd.push(fd);
                         args[i].stdinfds.push_back(fd);
                     }
                     j++;
@@ -232,75 +224,65 @@ void mainCyc() {
             }
             args[i].argc -= 2*(args[i].stderrfds.size()+args[i].stdoutfds.size()+args[i].stdinfds.size());
         }
-        int fdin,fdout;
+        int fdin=0,fdout=1,fderr=2;
+        int pipefd[2]={0,1};
+        if(!args[0].stdinfds.empty()) {
+            if(pipe(pipefd)==-1) {
+                std::cerr << "Cannot create pipe." << std::endl;
+                execStatus = -1;
+                return ;
+            }
+        }
         for(int i = 0; i < args.size(); i++) {
-            if(i) args[i].stdinfds.insert(args[i].stdinfds.begin(),fdin);
+            FILE* fout;
+            if(pipefd[1]!=1)
+                fout = fdopen(pipefd[1],"w");
+            for(int j = 0;j < args[i].stdinfds.size();j++) {
+                FILE* fin = fdopen(args[i].stdinfds[j],"r");
+                char c = fgetc(fin);
+                while(!feof(fin)) {
+                    fputc(c,fout);
+                    c = fgetc(fin);
+                }
+                fclose(fin);
+                close(args[i].stdinfds[j]);
+            }
+            if(pipefd[1]!=1) fclose(fout);
+            if(i==0&&pipefd[1]!=1) close(pipefd[1]);
+            fdin = pipefd[0];
+            fdout = 1;
             if(i-args.size()+1) {
-                int pipefd[2];
                 if(pipe(pipefd) == -1) {
                     std::cerr << "Cannot create pipe." << std::endl;
                     execStatus = -1;
                     return ;
                 }
-                openedfd.push(pipefd[0]);
-                openedfd.push(pipefd[1]);
-                fdin =  pipefd[0];
                 fdout = pipefd[1];
-                args[i].stdoutfds.insert(args[i].stdoutfds.begin(),fdout);
             }
+            args[i].in = fdin;
+            args[i].out = fdout;
+            args[i].err = fderr;
             execStatus = execCommand(args[i]);
-            close(fdout);
-        }}
+        }
+        for(int i = 0; i < args.size(); i++) {
+            int sta;
+            waitpid(args[i].pid,&sta,0);
+            if(!sta) execStatus = sta;
+            if(args[i].in!=0) close(args[i].in);
+        }
+    }
+            std::cout << "tset" << std::endl;
 }
 
 int execCommand(arguments &arg) {
+    std::cout << arg.command << " " << arg.in << " " << arg.out <<  ' ' << arg.err << std::endl;
     if (arg.command.empty()) return 0;
-    int fdin=0,fdout=1,fderr=2;
-    int pfdout=1,pfderr=2;
-    if(arg.stdinfds.size()!=0) {
-        int pipefd[2];
-        if(pipe(pipefd)) {
-            std::cerr << "Cannot create pipe." << std::endl;
-            return -1;
-        }else {
-            FILE* pin = fdopen(pipefd[1],"w");
-            for(int i = 0; i < arg.stdinfds.size(); i++) {
-                FILE* fin =  fdopen(arg.stdinfds[i],"r");
-                while(!feof(fin)) {
-                    char c = fgetc(fin);
-                    fputc(c,pin);
-                }
-            }
-            fclose(pin);
-            close(pipefd[1]);
-            fdin = pipefd[0];
-        }
-    }
-    if(arg.stdoutfds.size()!=0) {
-        int pipefd[2];
-        if(pipe(pipefd)) {
-            std::cerr << "Cannot create pipe." << std::endl;
-            return -1;
-        }else {
-            pfdout = pipefd[0];
-            fdout =  pipefd[1];
-        }
-    }
-    if(arg.stderrfds.size()!=0) {
-        int pipefd[2];
-        if(pipe(pipefd)) {
-            std::cerr << "Cannot create pipe." << std::endl;
-            return -1;
-        }else {
-            pfderr = pipefd[0];
-            fderr =  pipefd[1];
-        }
-    }
+    int pfdin=0,pfdout=1,pfderr=2;
     if(arg.command == "exit"||arg.command=="pwd"||arg.command=="cd"||arg.command=="export"||arg.command=="where") {
         int result = -1;
-        if(fdin != 0 ) stdin = fdopen(fdin,"r");
-        if(fdout != 1 ) stdout = fdopen(fdout,"w");
-        if(fderr != 2 ) stderr = fdopen(fderr,"w");
+        if(arg.in != 0 ) stdin = fdopen(arg.in,"r");
+        if(arg.out != 1 ) stdout = fdopen(arg.out,"w");
+        if(arg.err != 2 ) stderr = fdopen(arg.err,"w");
         if (arg.command == "exit") {
             result = shellExit();
         }
@@ -316,9 +298,9 @@ int execCommand(arguments &arg) {
         else if (arg.command == "where") {
             result = shellWhere(arg);
         }
-        if(fdin != 0 ) stdin = fdopen(0,"r");
-        if(fdout != 1 ) stdout = fdopen(1,"w");
-        if(fderr != 2 ) stderr = fdopen(2,"w");
+        if(arg.in != 0 ) stdin = fdopen(0,"r");
+        if(arg.out != 1 ) stdout = fdopen(1,"w");
+        if(arg.err != 2 ) stderr = fdopen(2,"w");
         return result;
     }
     uint64_t commandHash = std::hash<std::string>()(arg.command);
@@ -332,43 +314,43 @@ int execCommand(arguments &arg) {
             args.push_back(arg.command.data());
             for (int i = 0; i < arg.argc; i++) args.push_back(arg.argv[i].data());
             args.push_back(nullptr);
-            dup2(fdin,0);
-            dup2(fdout,1);
-            dup2(fderr,2);
+            dup2(arg.in,0);
+            dup2(arg.out,1);
+            dup2(arg.err,2);
             execv(execMap[commandHash].c_str(), args.data());
         }else {
-            int status;
-            forked = true;
-            cpid = pid;
-            waitpid(pid,&status,0);
-            forked = false;
-            if(pfdout!=1) {
-                close(fdout);
-                std::vector<FILE*> fss;
-                fss.clear();
-                for(int i = 0;i < arg.stdoutfds.size(); i++) {
-                    fss.push_back(fdopen(arg.stdoutfds[i],"w"));
-                }
-                FILE* outstream = fdopen(pfdout,"r");
-                while(!feof(outstream)) {
-                    char c = fgetc(outstream);
-                    for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
-                }
-                for(int i = 0;i < fss.size(); i++) fclose(fss[i]);
-            }
-            if(pfderr!=2) {
-                close(fderr);
-                std::vector<FILE*> fss;
-                fss.clear();
-                for(int i = 0;i < arg.stderrfds.size(); i++)
-                    fss.push_back(fdopen(arg.stderrfds[i],"w"));
-                FILE* outstream = fdopen(pfderr,"r");
-                while(!feof(outstream)) {
-                    char c = fgetc(outstream);
-                    for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
-                }
-            }
-            return status;
+            //int status;
+            //forked = true;
+            arg.pid = pid;
+            //waitpid(pid,&status,0);
+            //forked = false;
+            // if(out!=1) {
+            //     close(out);
+            //     std::vector<FILE*> fss;
+            //     fss.clear();
+            //     for(int i = 0;i < arg.stdoutfds.size(); i++) {
+            //         fss.push_back(fdopen(arg.stdoutfds[i],"w"));
+            //     }
+            //     FILE* outstream = fdopen(pfdout,"r");
+            //     while(!feof(outstream)) {
+            //         char c = fgetc(outstream);
+            //         for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
+            //     }
+            //     for(int i = 0;i < fss.size(); i++) fclose(fss[i]);
+            // }
+            // if(err!=2) {
+            //     close(err);
+            //     std::vector<FILE*> fss;
+            //     fss.clear();
+            //     for(int i = 0;i < arg.stderrfds.size(); i++)
+            //         fss.push_back(fdopen(arg.stderrfds[i],"w"));
+            //     FILE* outstream = fdopen(pfderr,"r");
+            //     while(!feof(outstream)) {
+            //         char c = fgetc(outstream);
+            //         for(int j = 0;j < fss.size(); j++) fputc(c,fss[j]);
+            //     }
+            // }
+            return 0;
         }
         return 0;
     }
@@ -385,12 +367,12 @@ int shellEcho(arguments &arg) {
 }
 
 void sigHandler(int sig) {
-    if(forked) {
-        kill(cpid,SIGINT);
-        waitpid(cpid,NULL,0);
-        forked = false;
-        longjmp(mainCycle, 1);
-    }
+    // if(forked) {
+    //     kill(cpid,SIGINT);
+    //     waitpid(cpid,NULL,0);
+    //     forked = false;
+    //     longjmp(mainCycle, 1);
+    // }
 }
 
 void loadExecutable(std::string &path) {
