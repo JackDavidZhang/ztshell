@@ -21,6 +21,8 @@ struct arguments {
     int in;
     int out;
     int err;
+    int next_out;
+    int next_err;
 };
 int shellExit();
 int shellCd(const arguments& arg);

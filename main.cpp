@@ -251,7 +251,7 @@ void mainCyc() {
             if(i==0&&pipefd[1]!=1) close(pipefd[1]);
             fdin = pipefd[0];
             fdout = 1;
-            if(i-args.size()+1) {
+            if((i-args.size()+1)||(!args[i].stdoutfds.empty())) {
                 if(pipe(pipefd) == -1) {
                     std::cerr << "Cannot create pipe." << std::endl;
                     execStatus = -1;
@@ -262,6 +262,7 @@ void mainCyc() {
             args[i].in = fdin;
             args[i].out = fdout;
             args[i].err = fderr;
+            args[i].next_out = pipefd[0];
             execStatus = execCommand(args[i]);
         }
         for(int i = 0; i < args.size(); i++) {
@@ -269,13 +270,26 @@ void mainCyc() {
             waitpid(args[i].pid,&sta,0);
             if(!sta) execStatus = sta;
             if(args[i].in!=0) close(args[i].in);
+            if(args[i].out != 1){
+                FILE* fin = fdopen(args[i].next_out,"r"); 
+                char c = fgetc(fin);
+                while(!feof(fin)){
+                    for(int j = 0;j < args[i].stdoutfds.size();j++){
+                        FILE* fout=fdopen(args[i].stdoutfds[j],"w");
+                        fputc(c,fout);
+                    }
+                    c = fgetc(fin);
+                }
+                fclose(fin);
+            }
+            for(int j = 0;j < args[i].stdoutfds.size();j++)
+                close(args[i].stdoutfds[j]); 
         }
     }
-            std::cout << "tset" << std::endl;
 }
 
 int execCommand(arguments &arg) {
-    std::cout << arg.command << " " << arg.in << " " << arg.out <<  ' ' << arg.err << std::endl;
+std::cout << arg.command << " " << arg.in << " " << arg.out <<  ' ' << arg.err << " " << arg.next_out << std::endl;
     if (arg.command.empty()) return 0;
     int pfdin=0,pfdout=1,pfderr=2;
     if(arg.command == "exit"||arg.command=="pwd"||arg.command=="cd"||arg.command=="export"||arg.command=="where") {
