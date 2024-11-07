@@ -226,13 +226,12 @@ void mainCyc() {
         }
         int fdin=0,fdout=1,fderr=2;
         int pipefd[2]={0,1};
-        if(!args[0].stdinfds.empty()) {
+        if(!args[0].stdinfds.empty())
             if(pipe(pipefd)==-1) {
                 std::cerr << "Cannot create pipe." << std::endl;
                 execStatus = -1;
                 return ;
             }
-        }
         for(int i = 0; i < args.size(); i++) {
             FILE* fout;
             if(pipefd[1]!=1)
@@ -247,11 +246,14 @@ void mainCyc() {
                 fclose(fin);
                 close(args[i].stdinfds[j]);
             }
-            if(pipefd[1]!=1) fclose(fout);
-            if(i==0&&pipefd[1]!=1) close(pipefd[1]);
+            if(pipefd[1]!=1)fflush(fout);
+            if(!i&&(pipefd[1]!=1)) {
+                fclose(fout);
+                close(pipefd[1]);
+            }
             fdin = pipefd[0];
             fdout = 1;
-            if((i-args.size()+1)||(!args[i].stdoutfds.empty())) {
+            if((i+1-args.size())||(!args[i].stdoutfds.empty())) {
                 if(pipe(pipefd) == -1) {
                     std::cerr << "Cannot create pipe." << std::endl;
                     execStatus = -1;
@@ -271,19 +273,29 @@ void mainCyc() {
             if(!sta) execStatus = sta;
             if(args[i].in!=0) close(args[i].in);
             if(args[i].out != 1){
-                FILE* fin = fdopen(args[i].next_out,"r"); 
-                char c = fgetc(fin);
-                while(!feof(fin)){
-                    for(int j = 0;j < args[i].stdoutfds.size();j++){
-                        FILE* fout=fdopen(args[i].stdoutfds[j],"w");
-                        fputc(c,fout);
+                close(args[i].out);
+                FILE* fin = fdopen(args[i].next_out,"r");
+                std::vector<FILE*> fouts;
+                for(int j = 0;j < args[i].stdoutfds.size();j++)
+                    fouts.push_back(fdopen(args[i].stdoutfds[j],"w"));
+                    rewind(fin);
+                    while(!feof(fin)){
+                        //std::cout << c;
+                        char c = fgetc(fin);
+                        for(int j = 0;j < fouts.size();j++)
+                            fputc(c,fouts[j]);
                     }
-                    c = fgetc(fin);
+                rewind(fin);
+                for(int j = 0;j < fouts.size();j++) fclose(fouts[j]);
+                if(i==args.size()-1) {
+                    close(args[i].next_out);
                 }
-                fclose(fin);
             }
             for(int j = 0;j < args[i].stdoutfds.size();j++)
-                close(args[i].stdoutfds[j]); 
+                close(args[i].stdoutfds[j]);
+            if(args[i].in!=0) close(args[i].in);
+            if(args[i].out!=1) close(args[i].out);
+            if(args[i].err!=2) close(args[i].err);
         }
     }
 }
