@@ -3,7 +3,7 @@ project(ztshell)
 
 set(CMAKE_CXX_STANDARD 20)
 
-set(CMAKE_CXX_FLAGS "-lreadline -fsanitize=address")
+set(CMAKE_CXX_FLAGS "-lreadline")
 
 add_executable(ztshell main.cpp
         src/exit.cpp

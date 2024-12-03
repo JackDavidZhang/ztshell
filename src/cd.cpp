@@ -16,7 +16,9 @@ int shellCd(const arguments &arg) {
         std::cout << "Can't change working directory to " << arg.argv[0] << std::endl;
         return -1;
     } else {
-        path = getcwd(nullptr, 0);
+        char *cpath = getcwd(nullptr, 0);
+        path = cpath;
+        free(cpath);
         if ((path == pwd->pw_dir) || path.substr(0, std::string(pwd->pw_dir).size() + 1) == std::string(pwd->pw_dir) +
             "/") {
             scPath = "~" + path.substr(std::string(pwd->pw_dir).size());
